@@ -1,0 +1,105 @@
+setwd("D:/Chapter 4/APSIM FHY Investment")
+
+rm(list = ls())
+options(stringsAsFactors = F)
+
+library("devEMF")
+library("dplyr")
+library("data.table")
+library("ggplot2")
+library("ggfan")
+library("lattice")
+library("ggpubr")
+library("gridExtra")
+library("grid")
+library("rio")
+library("ggthemes")
+library("writexl")
+library("xlsx")
+library("scales")
+library("wesanderson")
+library("ggsci")
+library("viridis")
+library("jcolors")
+library("gplots")
+library("tinytex")
+library("readxl")
+library("ggh4x")
+library("lemon")
+
+# Read Cash_flow DF
+
+Yield_Water <- read_xlsx("D:/Chapter 4/APSIM FHY Investment/Differences_baseline.xlsx")
+glimpse(Yield_Water)
+
+# Convert date strings to date (line plot)
+Yield_Water <- Yield_Water %>% group_by(Period, Adaptation,Irrigation,Scenario)
+Yield_Water$Period <- factor(Yield_Water$Period, levels = c("Historical","Future"))
+Yield_Water$Adaptation <- factor(Yield_Water$Adaptation, levels = c("Baseline","Diversified","Intensified","Simplified"))
+Yield_Water$Irrigation <- factor(Yield_Water$Irrigation, levels = c("Gravity","Pipe&Riser","Drip", "Pivot"))
+Yield_Water$Scenario <- factor(Yield_Water$Scenario, 
+                                levels=c("Baseline_Gravity","Baseline_Pivot","Baseline_Drip","Baseline_Pipe&Riser",
+                                         "Diversified_Gravity","Diversified_Pivot","Diversified_Drip","Diversified_Pipe&Riser",
+                                         "Intensified_Gravity","Intensified_Pivot","Intensified_Drip","Intensified_Pipe&Riser",
+                                         "Simplified_Gravity","Simplified_Pivot","Simplified_Drip","Simplified_Pipe&Riser"), 
+                                labels=c("Baseline Gravity","Baseline Pivot","Baseline Drip","Baseline Pipe & Riser",
+                                         "Diversified Gravity","Diversified Pivot","Diversified Drip","Diversified Pipe & Riser",
+                                         "Intensified Gravity","Intensified Pivot","Intensified Drip","Intensified Pipe & Riser",
+                                         "Simplified Gravity","Simplified Pivot","Simplified Drip","Simplified Pipe & Riser"))
+
+
+Yield_Water <- na.omit(Yield_Water) 
+glimpse(Yield_Water)
+str(Yield_Water)
+
+
+# make a whizz-bang chart)
+
+Yield_Waterplot <- ggplot(data = Yield_Water ,aes(x = percentage_water, y = percentage_yield, group=Scenario, fill=Scenario, color = Scenario,shape=Period)) +
+  geom_point(data = Yield_Water ,aes(x = percentage_water, y = percentage_yield,shape=Period,color = Scenario, fill=Scenario),size=5.5, stroke = 1.9)+
+  geom_abline(slope=1, intercept=0,linetype="dashed" ,size=0.8)+
+  scale_x_continuous(limits = c(-60, 240),breaks = seq(-60, 240, 60),expand = c(0, 0))+
+  scale_y_continuous(limits = c(-20, 80), breaks = seq(-20, 80, 20),expand = c(0, 0)) +
+  theme_bw(base_size = 19) +
+  scale_fill_manual(labels=c("Baseline Gravity","Baseline Pivot","Baseline Drip","Baseline Pipe & Riser",
+                             "Diversified Gravity","Diversified Pivot","Diversified Drip","Diversified Pipe & Riser",
+                             "Intensified Gravity","Intensified Pivot","Intensified Drip","Intensified Pipe & Riser",
+                             "Simplified Gravity","Simplified Pivot","Simplified Drip","Simplified Pipe & Riser"),
+                    values=c("#2812A5","#806CEF","#AFA3F5","#DFDAFB",
+                             "#137547","#25A244","#80ED99","#C7F9CC",
+                             "#890641","#EB0A6F","#F862A6","#FCC5DE",
+                             "#CC5500","#FF7C1F","#FFB885","#FFE7D6")) +
+  scale_color_manual(labels=c("Baseline Gravity","Baseline Pivot","Baseline Drip","Baseline Pipe & Riser",
+                              "Diversified Gravity","Diversified Pivot","Diversified Drip","Diversified Pipe & Riser",
+                              "Intensified Gravity","Intensified Pivot","Intensified Drip","Intensified Pipe & Riser",
+                              "Simplified Gravity","Simplified Pivot","Simplified Drip","Simplified Pipe & Riser"),
+                     values=c("#2812A5","#806CEF","#AFA3F5","#DFDAFB",
+                              "#137547","#25A244","#80ED99","#C7F9CC",
+                              "#890641","#EB0A6F","#F862A6","#FCC5DE",
+                              "#CC5500","#FF7C1F","#FFB885","#FFE7D6"))+
+  scale_shape_manual(labels=c("Historical","Future"),
+                     values=c(22,25)) + 
+  theme(legend.position="right") + 
+  theme(legend.title = element_text(colour="Black",face="bold", size=15),
+        legend.text = element_text(size = 15,colour="Black"),
+        legend.key.size = unit(0.9, 'cm'),
+        legend.key.width = unit(0,"cm"),
+        legend.spacing.y = unit(0, "mm")) +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.spacing.x =unit(-1.23,"cm", "lines"))+
+  theme( axis.text = element_text( size = 17, colour = "black"),
+         axis.text.y = element_text( size = 17, colour = "black" ),
+         axis.ticks.length.y = unit(-3.95, "pt"),
+         axis.ticks.length.x = unit(3.95, "pt"))+ 
+  theme(strip.background = element_blank(),
+        strip.text.x = element_blank())+
+  labs(x = "Percentage change in Water (%)", y = "Percentage change in Yield (%)") +
+  guides(colour=guide_legend(override.aes=list(shape=23)))
+
+Yield_Waterplot
+
+ggsave("Yield_Waterplot1.png", Yield_Waterplot, width=38, height=24, units="cm", dpi=300)
+
+ggsave("Yield_Waterplot1.tiff", Yield_Waterplot, width=38, height=24, units="cm", dpi=300)
