@@ -1,0 +1,444 @@
+setwd("C:/Climate Simulations/Sowing_future/output")
+
+rm(list = ls())
+options(stringsAsFactors = F)
+
+library("dplyr")
+library("data.table")
+library("ggplot2")
+library("ggfan")
+library("lattice")
+library("ggpubr")
+library("gridExtra")
+library("grid")
+library("rio")
+library("ggthemes")
+library("writexl")
+library("xlsx")
+library("scales")
+library("wesanderson")
+library("ggsci")
+library("viridis")
+library("jcolors")
+library("gplots")
+library("tinytex")
+library("readxl")
+
+
+# Read moving average DF
+
+harvest1 <- read_xlsx("C:/Climate Simulations/Sowing_future/output/movingavg_Historical&Future1.xlsx")
+glimpse(harvest1)
+
+# Convert date strings to date (line plot)
+harvest1 <- harvest1 %>% group_by(crop,Region,genotype,Irrigation)
+harvest1$Mindate <- as.Date(harvest1$Mindate,format= "%d-%m-%Y")
+harvest1$flowering_date  <- as.Date(harvest1$flowering_date ,format= "%d-%m-%Y")
+harvest1$Maxdate <- as.Date(harvest1$Maxdate,format= "%d-%m-%Y")
+harvest1$Irrigation <- factor(harvest1$Irrigation, levels = c("Dryland","Irrigated"))
+glimpse(harvest1)
+############################################################################################################################ 
+## Smoother FHY and put into DATAFRAME (do something like this)
+############################################################################################################################
+x<-harvest1
+x<-droplevels(x)
+str(x)
+
+xsplit_basic<-split(x,~crop+Region+genotype+Irrigation)
+
+# function to apply smoother
+fsmooth_FHY<-function(xin,bandwidth=.25){
+  #xin<-xsplit_basic[['maize.Colleambally.Late.Irrigated']]
+  xx<-cbind(xin,fdate_order=rank(xin$flowering_date))
+  
+  mod0<-loess(FHY ~ fdate_order , data=xx,span = bandwidth)
+  mod0_hat<-data.frame(FHY_hat=predict(mod0, xx),xx[,colnames(xx)%in%c("fdate_order","flowering_date")])
+  # plot(xx$flowering_date,xx$FHY)
+  # lines(mod0_hat$flowering_date,mod0_hat$FHY_hat)
+  # lines(xx$flowering_date,xx$Meanyield ,col=2)
+  
+  cbind(xx,FHY_hat=mod0_hat$FHY_hat)
+}
+
+# find `optimal` period
+xsplit<-lapply(xsplit_basic,FUN=fsmooth_FHY)
+xsplit_max<-lapply(xsplit,function(i){i[i$FHY_hat>=(.95*max(i$FHY_hat)),]}) #quick and dirty window based on Meanyield
+xsplit_max_opt<-lapply(xsplit_max,function(i){data.frame(i[1,1:4],ofp_min=min(i$flowering_date),ofp_max=max(i$flowering_date))})
+
+ofp_dum<-do.call(rbind,xsplit_max_opt)
+ofp_dum<-as_tibble(cbind(ofp_dum,min_yeild=0,max_yeild=Inf))
+str(ofp_dum)
+
+x_new<-do.call(rbind,xsplit)
+
+# Write the column DF
+
+write_xlsx(ofp_dum,"C:/Climate Simulations/Sowing_future/output/ofp_dum_Historical&Future_1.xlsx")
+
+#################################################################################################################################
+#Subset DF for wheat
+#################################################################################################################################
+
+#Wheat DF
+
+x_newwheat <-x_new[!(x_new$crop=="Barley"|x_new$crop=="Canola"|x_new$crop=="Chickpea"|x_new$crop=="Maize"|
+                     x_new$crop=="barley2"|x_new$crop=="canola2"|x_new$crop=="chickpea2"|x_new$crop=="maize2"),]
+glimpse(x_newwheat)
+
+write_xlsx(x_newwheat,"C:/Climate Simulations/Sowing_future/output/x_newwheat.xlsx")
+
+
+# Wheat column DF (for geom_rect)
+
+ofp_dumWheat <- read_xlsx("C:/Climate Simulations/Sowing_future/output/ofp_dumWheat.xlsx")
+glimpse(ofp_dumWheat)
+
+ofp_dumWheat$ofp_min <- as.Date(ofp_dumWheat$ofp_min,format= "%d-%m-%Y")
+ofp_dumWheat$ofp_max <- as.Date(ofp_dumWheat$ofp_max,format= "%d-%m-%Y")
+
+glimpse(ofp_dumWheat)
+
+############################################################################################################################################ 
+# Plot wheat OFPs for each region separately then combine with ggarrange
+############################################################################################################################################
+# list the variables
+g<- list()
+for (thisCrop in unique(x_newwheat$crop)) {
+  for(thisRegion in unique(x_newwheat$Region)) {
+    
+    thisData<- x_newwheat[x_newwheat$crop == thisCrop &  x_newwheat$Region == thisRegion,]
+    if (thisCrop == "Wheat") {
+      X <- recode(thisData$genotype, `Early` = "Early", `Late` = "Late")
+      thisData$genotype <- X
+    }
+    
+    # FHY_hat at flowering time for Historical
+    
+    if (thisCrop == "Wheat" && thisRegion == "Frances") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype, show.legend = FALSE)) + 
+        geom_line(aes(x = flowering_date,y = Frost*10000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*10000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*4000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 10000), breaks = seq(0, 10000, 2000),expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./10000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.11,b =-0.1, l =-0.7),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.12, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12),
+               legend.title=element_blank())+ guides(color = guide_legend(override.aes = list(size=2))) +
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside") +
+        geom_rect(data = ofp_dumWheat[1,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[2,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[3,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[4,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)
+    }
+    if (thisCrop == "Wheat" && thisRegion == "Griffith") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype, show.legend = FALSE)) + 
+        geom_line(aes(x = flowering_date,y = Frost*5000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*5000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*2000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 10000), breaks = seq(0, 10000, 2000),labels = NULL,expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./10000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.1,b =-0.1, l =-0.15),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside")+
+        geom_rect(data = ofp_dumWheat[5,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[6,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[7,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[8,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+            ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)  
+    }
+    if (thisCrop == "Wheat" && thisRegion == "Hagley") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*9000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*9000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*3000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 10000), breaks = seq(0, 10000, 2000),labels = NULL,expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./10000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.1,b =-0.1, l =-0.25),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside")+
+        geom_rect(data = ofp_dumWheat[9,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[10,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[11,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[12,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)    
+    }
+    if (thisCrop == "Wheat" && thisRegion == "Kerang") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*5000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*5000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*4000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 10000), breaks = seq(0, 10000, 2000),labels = NULL, expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./10000,name = "Historical Climates" )) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_grid(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =0.1,b =-0.1, l =-0.35),"cm" )) +
+        theme(axis.title.y.right = element_text(angle = 90)) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside") +
+        geom_rect(data = ofp_dumWheat[13,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[14,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[15,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[16,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+             ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE) 
+        
+    }
+    
+    # FHY_hat at flowering time for Future
+    
+    if (thisCrop == "wheat2" && thisRegion == "Frances") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*4000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*4000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*3000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 7000), breaks = seq(0, 7000, 1400),expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./7000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.11,b =-0.1, l =-0.7),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.12, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside") +
+        geom_rect(data = ofp_dumWheat[17,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[18,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[19,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[20,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)
+    }
+    if (thisCrop == "wheat2" && thisRegion == "Griffith") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*4000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*4000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*3000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 7000), breaks = seq(0, 7000, 1400),labels = NULL,expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./7000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.1,b =-0.1, l =-0.15),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside")+
+        geom_rect(data = ofp_dumWheat[21,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[22,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[23,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[24,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)  
+    }
+    if (thisCrop == "wheat2" && thisRegion == "Hagley") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*7000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*7000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*1000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 7000), breaks = seq(0, 7000, 1400),labels = NULL,expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./7000, labels = NULL)) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_wrap(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =-0.1,b =-0.1, l =-0.25),"cm")) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside")+
+        geom_rect(data = ofp_dumWheat[25,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                        ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[26,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[27,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[28,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)    
+    }
+    if (thisCrop == "wheat2" && thisRegion == "Kerang") {
+      g[[paste0(thisCrop, thisRegion, "FHY_hat", sep=".")]] <- 
+        thisData %>% 
+        ggplot() + 
+        geom_line(aes(x = flowering_date, y = FHY_hat, group = genotype, color = genotype)) + 
+        geom_line(aes(x = flowering_date,y = Frost*5000, group=genotype, color = "Frost")) + 
+        geom_line(aes(x = flowering_date,y = Heat*5000, group=genotype, color = "Heat")) +
+        geom_line(aes(x = flowering_date,y = Swstress*3000, group=genotype, color = "Swstress")) +
+        scale_x_date (limits = as.Date(c("2000-08-25", "2000-11-25")), breaks = "1 month", date_labels = "%b") +
+        scale_y_continuous(limits = c(0, 7000), breaks = seq(0, 7000, 1400),labels = NULL, expand = c(0, 0),
+                           sec.axis = sec_axis(trans = ~ ./7000, name = "Future Climates")) +
+        scale_color_manual(values=c(Late = "darkorchid1", Early = "darkorange1", Frost="mediumblue", Heat="red", Swstress="green")) +
+        scale_fill_manual(values=c(Late = "darkorchid1", Early = "darkorange1")) +
+        labs(title=paste(thisRegion), 
+             y="", x="", fill="genotype") + 
+        theme_classic2(base_size = 12) + facet_grid(~Irrigation) +
+        theme(plot.margin=unit(c(t =0.05, r =0.1,b =-0.1, l =-0.35),"cm" )) +
+        theme(axis.title.y.right = element_text(angle = 90)) +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.spacing=unit(0.1, "lines"),
+              strip.background = element_rect(color = "black", size = 1))+
+        theme( axis.text = element_text( size = 12),
+               axis.text.y = element_text( size = 12 ),
+               strip.text = element_text(size = 12),
+               legend.text=element_text(size=12))+ 
+        theme(strip.text.y = element_text(face="plain"), strip.placement.y = "outside") +
+        geom_rect(data = ofp_dumWheat[29,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[30,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[31,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE)+
+        geom_rect(data = ofp_dumWheat[32,] , mapping=aes(xmin = as.Date(ofp_min), xmax = as.Date(ofp_max), 
+                                                         ymin = min_yeild, ymax = max_yeild, fill=genotype,color=genotype, show.legend = FALSE), alpha=.1, show.legend = FALSE) 
+      
+    }
+    
+    Figure<- ggarrange(g[["WheatFrancesFHY_hat."]],g[["WheatGriffithFHY_hat."]], g[["WheatHagleyFHY_hat."]],g[["WheatKerangFHY_hat."]],
+                       g[["wheat2FrancesFHY_hat."]],g[["wheat2GriffithFHY_hat."]], g[["wheat2HagleyFHY_hat."]],g[["wheat2KerangFHY_hat."]],
+                       
+                       plotlist = NULL,
+                       ncol = 4,
+                       nrow = 2,
+                       labels = NULL,
+                       label.x = 0,
+                       label.y = 1,
+                       hjust = 0.2,
+                       vjust = -1.0,
+                       font.label = list(size = 14, color = "black", face = "bold", family = NULL),
+                       align = "v",
+                       widths = c(0.5, 0.5),
+                       heights = c(0.5, 0.5),
+                       legend = c("bottom"),
+                       common.legend = TRUE,
+                       legend.grob = NULL)
+    
+    
+    y_title <- expression(paste(bold("Yield (kg/ha)")))
+    x_title <- expression(paste(bold("Flowering time")))
+    top_title <- expression(paste(bold("Wheat")))
+    right_title <- expression(paste(bold("Stress Index")))
+    grid.arrange(Figure, left=textGrob(y_title, rot=90, hjust = 0.2, gp=gpar(fontsize=12)), bottom=textGrob(x_title, gp=gpar(fontsize=12)), 
+                 right=textGrob(right_title, rot=90, hjust = 0.2, gp=gpar(fontsize=12)))
+  }
+  
+}
+
+
